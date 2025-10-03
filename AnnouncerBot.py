@@ -31,28 +31,24 @@ async def on_ready():
         #await tchannel.send('Hello World!')
         if len(vchannel.members) > 0:
             await vchannel.connect()
-        await bot.change_presence(activity = discord.CustomActivity('✔️ !commands'))
+        await bot.change_presence(activity = discord.CustomActivity('✔️ !help'))
     except Exception as e:
         print(f"Something went wrong with on_ready: {e}")
 
-@bot.command(name = 'commands')
-async def help(ctx):
-    await ctx.send('Bot Commands:\n!disable: Disables welcome/goodbye messages in VC ❌\n!enable: Enables welcome/goodbye messages in VC ✔️')
-
-@bot.command(name = 'disable')
+@bot.command(name = 'disable', help = 'Disables welcome/goodbye messages in VC ❌')
 async def disable(ctx):
     global hello_goodbye
     hello_goodbye = False
     print('Disabled welcome and goodbye.')
-    await bot.change_presence(activity = discord.CustomActivity('❌ !commands'))
+    await bot.change_presence(activity = discord.CustomActivity('❌ !help'))
     await ctx.message.delete()
 
-@bot.command(name = 'enable')
+@bot.command(name = 'enable', help = 'Enables welcome/goodbye messages in VC ✔️')
 async def enable(ctx):
     global hello_goodbye
     hello_goodbye = True
     print('Enabled welcome and goodbye.')
-    await bot.change_presence(activity = discord.CustomActivity('✔️ !commands'))
+    await bot.change_presence(activity = discord.CustomActivity('✔️ !help'))
     await ctx.message.delete()
 
 @bot.event
