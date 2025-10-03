@@ -6,6 +6,7 @@ import discord
 from discord import FFmpegPCMAudio
 from discord.ext import commands
 from gtts import gTTS
+import asyncio
 
 load_dotenv()
 TOKEN = os.environ.get('TOKEN')
@@ -19,11 +20,14 @@ text_channel = os.environ.get('TEXT_CHANNEL')
 
 hello_goodbye = True
 
+keep_alive_task = None
+
 @bot.event
 async def on_ready():
     try:
         global tchannel
         global vchannel
+        global keep_alive_task
         tchannel = bot.get_channel(int(text_channel))
         vchannel = bot.get_channel(int(voice_channel))
         print('working probably')
@@ -32,8 +36,20 @@ async def on_ready():
         if len(vchannel.members) > 0:
             await vchannel.connect()
         await bot.change_presence(activity = discord.CustomActivity('✔️ !help'))
+        keep_alive_task = asyncio.create_task(keep_alive())
     except Exception as e:
         print(f"Something went wrong with on_ready: {e}")
+
+async def keep_alive():
+    try:
+        while True:
+            if bot.voice_clients:
+                while bot.voice_clients[0].is_playing():
+                    sleep(1)
+                bot.voice_clients[0].send_audio_packet(b'\xF8\xFF\xFE', encode=False) #should be silent but still count as saying something
+            await asyncio.sleep(60)
+    except Exception as e:
+        print(f"Something went wrong with keep_alive: {e}")
 
 @bot.command(name = 'disable', help = 'Disables welcome/goodbye messages in VC ❌')
 async def disable(ctx):
