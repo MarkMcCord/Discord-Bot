@@ -74,14 +74,9 @@ async def on_voice_state_update(member, before, after):
         if hello_goodbye:
             #they joined voice
             if before.channel != after.channel and after.channel is not None:
-                if after.channel.name == vchannel.name and member.id != bot.user.id:
+                if after.channel.name == vchannel.name and member.bot == False:
                     #await member.guild.system_channel.send(member.name + ' just joined voice.')
-                    nameToUse = str()
-                    if member.nick == None:
-                        nameToUse = member.name
-                    else:
-                        nameToUse = member.nick
-                    clip = gTTS(text= "Welcome " + nameToUse, tld='com',lang='zh-CN')
+                    clip = gTTS(text= "Welcome " + member.display_name, tld='com',lang='zh-CN')
                     clip.save("clip.mp3")
                     source = FFmpegPCMAudio('clip.mp3')
                     if bot.voice_clients:
@@ -93,14 +88,9 @@ async def on_voice_state_update(member, before, after):
                         vc.play(source)
             #they left voice
             if before.channel is not None and after.channel != before.channel:
-                if before.channel.name == vchannel.name and member.id != bot.user.id:
+                if before.channel.name == vchannel.name and member.bot == False:
                     #await member.guild.system_channel.send(member.name + ' just left voice.')
-                    nameToUse = str()
-                    if member.nick == None:
-                        nameToUse = member.name
-                    else:
-                        nameToUse = member.nick
-                    clip = gTTS(text= "Goodbye " + nameToUse, tld='com',lang='zh-CN')
+                    clip = gTTS(text= "Goodbye " + member.display_name, tld='com',lang='zh-CN')
                     clip.save("clip.mp3")
                     source = FFmpegPCMAudio('clip.mp3')
                     if bot.voice_clients:
