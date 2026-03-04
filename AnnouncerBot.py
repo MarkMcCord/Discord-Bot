@@ -18,8 +18,6 @@ bot = commands.Bot(command_prefix='!', intents = intents)
 voice_channel = os.environ.get('VOICE_CHANNEL')
 text_channel = os.environ.get('TEXT_CHANNEL')
 
-hello_goodbye = True
-
 keep_alive_task = None
 
 @bot.event
@@ -27,15 +25,17 @@ async def on_ready():
     try:
         global tchannel
         global vchannel
+        global status
         global keep_alive_task
         tchannel = bot.get_channel(int(text_channel))
         vchannel = bot.get_channel(int(voice_channel))
+        status = '✔️'
         print('working probably')
         print(bot.user.name)
         #await tchannel.send('Hello World!')
         if len(vchannel.members) > 0:
             await vchannel.connect()
-        await bot.change_presence(activity = discord.CustomActivity('✔️ !help'))
+        await bot.change_presence(activity = discord.CustomActivity(status + ' !help'))
         keep_alive_task = asyncio.create_task(keep_alive())
     except Exception as e:
         print(f"Something went wrong with on_ready: {e}")
@@ -43,35 +43,35 @@ async def on_ready():
 async def keep_alive():
     try:
         while True:
-            if bot.voice_clients:
-                while bot.voice_clients[0].is_playing():
-                    sleep(1)
+            if bot.voice_clients and bot.voice_clients[0].is_playing() == False: #if we're already playing, we're already alive
                 bot.voice_clients[0].send_audio_packet(b'\xF8\xFF\xFE', encode=False) #should be silent but still count as saying something
+                print("Sending: Keep alive")
             await asyncio.sleep(60)
     except Exception as e:
         print(f"Something went wrong with keep_alive: {e}")
 
 @bot.command(name = 'disable', help = 'Disables welcome/goodbye messages in VC ❌')
 async def disable(ctx):
-    global hello_goodbye
-    hello_goodbye = False
+    global status
+    status = '❌'
     print('Disabled welcome and goodbye.')
-    await bot.change_presence(activity = discord.CustomActivity('❌ !help'))
+    await bot.change_presence(activity = discord.CustomActivity(status + ' !help'))
     await ctx.message.delete()
 
 @bot.command(name = 'enable', help = 'Enables welcome/goodbye messages in VC ✔️')
 async def enable(ctx):
-    global hello_goodbye
-    hello_goodbye = True
+    global status
+    status = '✔️'
     print('Enabled welcome and goodbye.')
-    await bot.change_presence(activity = discord.CustomActivity('✔️ !help'))
+    await bot.change_presence(activity = discord.CustomActivity(status + ' !help'))
     await ctx.message.delete()
 
 @bot.event
 async def on_voice_state_update(member, before, after):
     try:
         global vchannel
-        if hello_goodbye:
+        global status
+        if status == '✔️':
             #they joined voice
             if before.channel != after.channel and after.channel is not None:
                 if after.channel.name == vchannel.name and member.bot == False:
@@ -86,6 +86,7 @@ async def on_voice_state_update(member, before, after):
                     else:
                         vc = await vchannel.connect()
                         vc.play(source)
+                    print("Sending: Welcome " + member.display_name)
             #they left voice
             if before.channel is not None and after.channel != before.channel:
                 if before.channel.name == vchannel.name and member.bot == False:
@@ -100,6 +101,7 @@ async def on_voice_state_update(member, before, after):
                     else:
                         vc = await vchannel.connect()
                         vc.play(source)
+                    print("Sending: Goodbye " + member.display_name)
                     #disconnect if no one else is in voice
                     while bot.voice_clients[0].is_playing():
                         sleep(1)
@@ -120,7 +122,8 @@ async def on_voice_state_update(member, before, after):
 async def on_voice_channel_effect(effect):
     try:
         global vchannel
-        if (effect.emoji.name == '🦎'):
+        global status
+        if (status == '✔️' and effect.emoji.name == '🦎'):
             source = FFmpegPCMAudio(os.path.join('gex', random.choice(os.listdir(os.path.join(os.getcwd(), 'gex')))))
             if bot.voice_clients:
                 while bot.voice_clients[0].is_playing():
@@ -129,7 +132,7 @@ async def on_voice_channel_effect(effect):
             else:
                 vc = await vchannel.connect()
                 vc.play(source)
-            print('Gex Quote Here')
+            print('Sending: Gex Quote')
     except Exception as e:
         print(f"Something went wrong with on_voice_channel_effect: {e}")
 
