@@ -1,3 +1,4 @@
 discord.py[voice]
 python-dotenv
 gTTS
+mysql-connector-python

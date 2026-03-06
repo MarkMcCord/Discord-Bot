@@ -1,33 +1,41 @@
 import os
 import random
 from time import sleep
-from dotenv import load_dotenv
 import discord
 from discord import FFmpegPCMAudio
 from discord.ext import commands
 from gtts import gTTS
 import asyncio
+import mysql.connector
 
-load_dotenv()
-TOKEN = os.environ.get('TOKEN')
+db_config = {
+    'user': os.environ.get('DB_USER'),
+    'password': open(os.environ.get('DB_PASSWORD_FILE'), 'r').read().strip(),
+    'host': os.environ.get('DB_HOST'),
+    'database': 'servers',
+}
+
+TOKEN = open(os.environ.get('TOKEN_FILE'), 'r').read().strip()
 intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix='!', intents = intents)
 
 voice_channel = os.environ.get('VOICE_CHANNEL')
-text_channel = os.environ.get('TEXT_CHANNEL')
 
 keep_alive_task = None
 
 @bot.event
 async def on_ready():
     try:
-        global tchannel
         global vchannel
         global status
         global keep_alive_task
-        tchannel = bot.get_channel(int(text_channel))
+
+        cnx = mysql.connector.connect(**db_config)
+        cursor = cnx.cursor()
+        print("Database connection established.")
+
         vchannel = bot.get_channel(int(voice_channel))
         status = '✔️'
         print('working probably')
@@ -37,8 +45,16 @@ async def on_ready():
             await vchannel.connect()
         await bot.change_presence(activity = discord.CustomActivity(status + ' !help'))
         keep_alive_task = asyncio.create_task(keep_alive())
+
     except Exception as e:
         print(f"Something went wrong with on_ready: {e}")
+
+    finally:
+        if 'cursor' in locals() and cursor is not None:
+            cursor.close()
+        if 'cnx' in locals() and cnx.is_connected():
+            cnx.close()
+            print("Database connection closed.")
 
 async def keep_alive():
     try:
@@ -47,6 +63,7 @@ async def keep_alive():
                 bot.voice_clients[0].send_audio_packet(b'\xF8\xFF\xFE', encode=False) #should be silent but still count as saying something
                 print("Sending: Keep alive")
             await asyncio.sleep(60)
+
     except Exception as e:
         print(f"Something went wrong with keep_alive: {e}")
 
@@ -115,6 +132,7 @@ async def on_voice_state_update(member, before, after):
                     sleep(1)
                 if len(before.channel.members) == 1:
                     await bot.voice_clients[0].disconnect()
+
     except Exception as e:
         print(f"Something went wrong with on_voice_state_update: {e}")
 
@@ -133,6 +151,7 @@ async def on_voice_channel_effect(effect):
                 vc = await vchannel.connect()
                 vc.play(source)
             print('Sending: Gex Quote')
+
     except Exception as e:
         print(f"Something went wrong with on_voice_channel_effect: {e}")
 
