@@ -36,18 +36,14 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix='!', intents = intents)
 
-keep_alive_task = None
-
 @bot.event
 async def on_ready():
     try:
-        global vchannel
-        global status
-        global keep_alive_task
+        global voice_channels #Key is voice channel ID, value is enable/disable status for that channel
+        global keep_alive_tasks
 
-        vchannel = None
-        starting_vc = None
-        status = False
+        voice_channels = {}
+        keep_alive_tasks = []
 
         cnx = mysql.connector.connect(**db_config)
         with cnx.cursor() as cursor:
@@ -62,44 +58,39 @@ async def on_ready():
                     else:
                         print(err.msg)
 
-            #To do: How to choose the right voice channel if there are multiple servers?
-            #For testing, just get the first entry in the database if there is one
-            cursor.execute("SELECT voice_channel_id FROM servers LIMIT 1")
-            result = cursor.fetchone()
-            if result:
-                starting_vc = result[0]
+            #Load all of the voice channels and their enabled/disabled status into memory
+            #To do: I doubt this approach is scalable, but I'm only testing with 2 servers currently
+            cursor.execute("SELECT voice_channel_id, welcome_enabled FROM servers")
+            result = cursor.fetchall()
+            for row in result:
+                voice_channels[int(row[0])] = bool(row[1])
 
-        if starting_vc:
-            vchannel = bot.get_channel(int(starting_vc))
-        status = get_welcome_status()
-        keep_alive_task = asyncio.create_task(keep_alive())
         await bot.change_presence(activity = discord.CustomActivity('!help'))
-        await join_if_active()
 
         print(bot.user.name)
-        if vchannel:
-            print(f"Announcing in: {vchannel.name}")
-        else:
-            print("No voice channel set.")
-        if status:
-            print("Status: Enabled")
-        else:
-            print("Status: Disabled")
+        for channel_id in voice_channels:
+            voice_channel = bot.get_channel(channel_id)
+            await join_if_active(voice_channel, voice_channels[channel_id])
+            keep_alive_tasks.append(asyncio.create_task(keep_alive(voice_channel)))
+            print(f"Announcing in: {voice_channel.name}")
+            if voice_channels[channel_id]:
+                print("Status: Enabled")
+            else:
+                print("Status: Disabled")
 
     except Exception as e:
         print(f"Something went wrong with on_ready: {e}")
 
-async def keep_alive():
+async def keep_alive(voice_channel):
+    #To do: some way to skip the loop if we sent a message recently (may require a mutex or something)
     try:
-        global vchannel
-
         while True:
-            if vchannel:
-                vc = next((vc for vc in bot.voice_clients if vc.channel.id == vchannel.id), None)
-                if vc and vc.is_playing() == False: #If we're already playing, we're don't need to keep alive
-                    vc.send_audio_packet(b'\xF8\xFF\xFE', encode=False) #Should be silent but still count as saying something
+            if voice_channel:
+                voice_client = get_voice_client(voice_channel)
+                if voice_client and voice_client.is_playing() == False: #If we're already playing, we're don't need to keep alive
+                    voice_client.send_audio_packet(b'\xF8\xFF\xFE', encode=False) #Should be silent but still count as saying something
                     print("Sending: Keep alive")
-                await leave_if_empty() #May as well check, in case something weird happened
+                await leave_if_empty(voice_channel) #May as well check, in case something weird happened
             await asyncio.sleep(60)
 
     except Exception as e:
@@ -107,7 +98,7 @@ async def keep_alive():
 
 @bot.command(name = 'enable', help = 'Enables welcome/goodbye messages in VC. Use !setvc [channel name] to set the voice channel if you haven\'t already.')
 async def enable(ctx):
-    await set_welcome_status(ctx, 1)
+    await set_welcome_status(ctx, 1) #Sending 1 rather than True, since that's how the db is set up.
 
 @bot.command(name = 'disable', help = 'Disables welcome/goodbye messages in VC.')
 async def disable(ctx):
@@ -116,25 +107,30 @@ async def disable(ctx):
 @bot.command(name = 'setvc', help = 'Sets the voice channel for the bot to announce in. Usage: !setvc [channel name]')
 async def setvc(ctx, *, channel_name):
     try:
-        global vchannel
-
-        new_vchannel = discord.utils.get(ctx.guild.voice_channels, name=channel_name)
-        if new_vchannel:
+        global voice_channels
+        
+        new_voice_channel = discord.utils.get(ctx.guild.voice_channels, name=channel_name)
+        if new_voice_channel:
             cnx = mysql.connector.connect(**db_config)
             with cnx.cursor() as cursor:
                 cursor.execute("SELECT id FROM servers WHERE guild_id = %s", (str(ctx.guild.id),))
                 result = cursor.fetchone()
-                if result: #Entry for this server already exists, update it
+                if result: #Entry for this server already exists, update it in db and in memory
                     cursor.execute("UPDATE servers "
-                                "SET voice_channel_id = %s WHERE guild_id = %s", (str(new_vchannel.id), str(ctx.guild.id)))
+                                "SET voice_channel_id = %s WHERE guild_id = %s", (str(new_voice_channel.id), str(ctx.guild.id)))
                     cnx.commit()
+                    #Move the welcome status to the new channel's entry and remove the old entry from the dictionary
+                    old_voice_channel = get_voice_channel(ctx.guild.id)
+                    if old_voice_channel:
+                        voice_channels[new_voice_channel.id] = voice_channels.pop(old_voice_channel.id)
                 else: #No entry for this server, insert it with the chosen channel
                     cursor.execute("INSERT INTO servers "
-                                "(guild_id, voice_channel_id) VALUES (%s, %s)", (str(ctx.guild.id), str(new_vchannel.id)))
+                                "(guild_id, voice_channel_id, welcome_enabled) VALUES (%s, %s, %s)", (str(ctx.guild.id), str(new_voice_channel.id), 1))
                     cnx.commit()
+                    #Add a new entry to our dictionary
+                    voice_channels[new_voice_channel.id] = True #Default to enabled, I'll see how people feel about it
 
-            vchannel = new_vchannel
-            await ctx.send(f"Voice channel set to: {vchannel.name}")
+            await ctx.send(f"Voice channel set to: {new_voice_channel.name}")
         else:
             await ctx.send("Voice channel not found.")
 
@@ -145,31 +141,31 @@ async def setvc(ctx, *, channel_name):
 @bot.event
 async def on_voice_state_update(member, before, after):
     try:
-        global vchannel
-        global status
+        global voice_channels
 
-        if vchannel:
-            if status:
+        voice_channel = get_voice_channel(member.guild.id)
+        if voice_channel:
+            if voice_channels[voice_channel.id]: #This is that status for that channel
                 #Case where they joined voice
                 if before.channel != after.channel and after.channel is not None:
-                    if after.channel.name == vchannel.name and member.bot == False:
+                    if after.channel.name == voice_channel.name and member.bot == False:
                         #await member.guild.system_channel.send(member.name + ' just joined voice.')
                         clip = gTTS(text= "Welcome " + member.display_name, tld='com',lang='zh-CN')
                         clip.save("clip.mp3")
                         source = FFmpegPCMAudio('clip.mp3')
-                        await play_queued(source)
+                        await play_queued(voice_channel, source)
                         print("Sending: Welcome " + member.display_name)
                 #Case where they left voice
                 if before.channel is not None and after.channel != before.channel:
-                    if before.channel.name == vchannel.name and member.bot == False:
+                    if before.channel.name == voice_channel.name and member.bot == False:
                         #await member.guild.system_channel.send(member.name + ' just left voice.')
                         clip = gTTS(text= "Goodbye " + member.display_name, tld='com',lang='zh-CN')
                         clip.save("clip.mp3")
                         source = FFmpegPCMAudio('clip.mp3')
-                        await play_queued(source)
+                        await play_queued(voice_channel, source)
                         print("Sending: Goodbye " + member.display_name)
                         #Disconnect if no one else is in voice
-                        await leave_if_empty()
+                        await leave_if_empty(voice_channel)
             else:
                 print('Hello and goodbye are currently disabled.')
 
@@ -179,12 +175,12 @@ async def on_voice_state_update(member, before, after):
 @bot.event
 async def on_voice_channel_effect(effect):
     try:
-        global vchannel
-        global status
+        global voice_channels
 
-        if vchannel and status and effect.emoji.name == '🦎':
+        voice_channel = get_voice_channel(effect.channel.guild.id)
+        if voice_channel and voice_channels[voice_channel.id] and effect.emoji.name == '🦎':
             source = FFmpegPCMAudio(os.path.join('gex', random.choice(os.listdir(os.path.join(os.getcwd(), 'gex')))))
-            await play_queued(source)
+            await play_queued(voice_channel, source)
             print('Sending: Gex Quote')
 
     except Exception as e:
@@ -192,44 +188,36 @@ async def on_voice_channel_effect(effect):
 
 #region Helper methods
 
-def get_welcome_status():
-    try:
-        global vchannel
+def get_voice_channel(guild_id):
+    #Get the voice channel that's been set for the given guild
+    #To do: might be more efficient to search the db for this
+    return next((bot.get_channel(vc) for vc in voice_channels if bot.get_channel(vc).guild.id == guild_id), None)
 
-        if vchannel:
-            cnx = mysql.connector.connect(**db_config)
-            with cnx.cursor() as cursor:
-                cursor.execute("SELECT welcome_enabled FROM servers WHERE guild_id = %s", (str(vchannel.guild.id),))
-                result = cursor.fetchone()
-                if result:
-                    return bool(result[0])
-                
-        return False #Status is irrelevant if we don't have a voice channel set, return false to be safe
-
-    except Exception as e:
-        print(f"Something went wrong with get_welcome_status: {e}")
+def get_voice_client(voice_channel):
+    #Get the voice client that's connected to the given voice channel
+    return next((vc for vc in bot.voice_clients if vc.channel.id == voice_channel.id), None)
 
 async def set_welcome_status(ctx, new_status):
     try:
-        global vchannel
-        global status
+        global voice_channels
 
-        if vchannel: #Status is irrelevant if we don't have a voice channel set
+        voice_channel = get_voice_channel(ctx.guild.id)
+        if voice_channel: #Status is irrelevant if we don't have a voice channel set
             cnx = mysql.connector.connect(**db_config)
             with cnx.cursor() as cursor:
                 cursor.execute("UPDATE servers "
                             "SET welcome_enabled = %s WHERE guild_id = %s", (new_status, str(ctx.guild.id)))
                 cnx.commit()
-            status = bool(new_status)
+            voice_channels[voice_channel.id] = bool(new_status)
 
-            if status:
+            if voice_channels[voice_channel.id]:
                 await ctx.send('Enabled welcome and goodbye.')
                 #Need to join if enabled
-                await join_if_active()
+                await join_if_active(voice_channel, voice_channels[voice_channel.id])
             else:
                 await ctx.send('Disabled welcome and goodbye.')
                 #Need to leave if disabled
-                voice_client = next((vc for vc in bot.voice_clients if vc.channel.id == vchannel.id), None)
+                voice_client = get_voice_client(voice_channel)
                 if voice_client:
                     while voice_client.is_playing():
                         sleep(1)
@@ -240,48 +228,41 @@ async def set_welcome_status(ctx, new_status):
     except Exception as e:
         print(f"Something went wrong with set_welcome_status: {e}")
 
-async def play_queued(source):
+async def play_queued(voice_channel, source):
     try:
-        global vchannel
-
-        if vchannel: #We should always have a voice channel assigned at this point, but just to be safe
-            vc = next((vc for vc in bot.voice_clients if vc.channel.id == vchannel.id), None)
-            if vc: #If we're already connected, wait for the current audio to finish and then play the new one
-                while vc.is_playing():
+        global alive
+        
+        if voice_channel: #We should always have a voice channel assigned at this point, but just to be safe
+            voice_client = get_voice_client(voice_channel)
+            if voice_client: #If we're already connected, wait for the current audio to finish and then play the new one
+                while voice_client.is_playing():
                     sleep(1)
-                vc.play(source)
+                voice_client.play(source)
             else: #If we're not connected, connect and play the audio
-                vc = await vchannel.connect()
-                vc.play(source)
-            return vc
-        return None
+                voice_client = await voice_channel.connect()
+                voice_client.play(source)
 
     except Exception as e:
         print(f"Something went wrong with play_queued: {e}")
 
-async def join_if_active():
+async def join_if_active(voice_channel, status):
     try:
-        global vchannel
-        global status
-
-        if vchannel and status and len(vchannel.members) > 0:
-            voice_client = next((vc for vc in bot.voice_clients if vc.channel.id == vchannel.id), None)
+        if voice_channel and status and len(voice_channel.members) > 0:
+            voice_client = get_voice_client(voice_channel)
             if not voice_client: #Don't try to join if we're already connected for some reason
-                await vchannel.connect()
+                await voice_channel.connect()
 
     except Exception as e:
         print(f"Something went wrong with join_if_active: {e}")
 
-async def leave_if_empty():
+async def leave_if_empty(voice_channel):
     try:
-        global vchannel
-
-        if vchannel: #Hopefully impossible to be in VC without vchannel being set
-            voice_client = next((vc for vc in bot.voice_clients if vc.channel.id == vchannel.id), None)
+        if voice_channel: #Hopefully impossible to be in VC without voice_channel being set
+            voice_client = get_voice_client(voice_channel)
             if voice_client:
                 while voice_client.is_playing():
                     sleep(1)
-                if len(vchannel.members) == 1: #If there's only one member left in the channel, it's the bot
+                if len(voice_channel.members) == 1: #If there's only one member left in the channel, it's the bot
                     await voice_client.disconnect()
 
     except Exception as e:
@@ -290,4 +271,4 @@ async def leave_if_empty():
 #endregion
 
 bot.run(TOKEN)
-#To do: How to leave vc before stopping the bot?
+#To do: How to leave any VCs before stopping the bot?
