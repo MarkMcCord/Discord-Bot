@@ -1,5 +1,7 @@
 .env
 clip.mp3
+welcome.mp3
+goodbye.mp3
 gex/
 .vscode/
 database_password.txt

@@ -1,19 +1,22 @@
 import os
 import random
 import discord
-from discord import FFmpegPCMAudio
+from discord import FFmpegOpusAudio
 from discord.ext import commands
 from gtts import gTTS
 import asyncio
 import mysql.connector
+from dotenv import load_dotenv
+
+load_dotenv()
 
 #region Database Setup
 
 db_config = {
     'user': os.environ.get('DB_USER'),
-    'password': open(os.environ.get('DB_PASSWORD_FILE'), 'r').read().strip(),
+    'password': os.environ.get('DB_PASSWORD_FILE'),
     'host': os.environ.get('DB_HOST'),
-    'database': 'servers',
+    'database': os.environ.get('DB_DATABASE'),
 }
 
 TABLES = {}
@@ -23,13 +26,14 @@ TABLES['servers'] = (
     "  `guild_id` varchar(255) NOT NULL,"
     "  `voice_channel_id` varchar(255) NOT NULL,"
     "  `welcome_enabled` tinyint(1) NOT NULL DEFAULT '0',"
+    "  `language` varchar(255) NOT NULL DEFAULT 'zh-CN',"
     "  PRIMARY KEY (`id`)"
     ") ENGINE=InnoDB"
 )
 
 #endregion
 
-TOKEN = open(os.environ.get('TOKEN_FILE'), 'r').read().strip()
+TOKEN = os.environ.get('TOKEN')
 intents = discord.Intents.default()
 intents.message_content = True
 
@@ -181,8 +185,8 @@ async def on_voice_state_update(member, before, after):
                     if after.channel.name == voice_channel.name and member.bot == False:
                         #await member.guild.system_channel.send(member.name + ' just joined voice.')
                         clip = gTTS(text= "Welcome " + member.display_name, tld='com',lang='zh-CN')
-                        clip.save("clip.mp3")
-                        source = FFmpegPCMAudio('clip.mp3')
+                        clip.save("welcome.mp3")
+                        source = FFmpegOpusAudio('welcome.mp3')
                         await play_queued(voice_channel, source)
                         print("Sending: Welcome " + member.display_name)
                 #Case where they left voice
@@ -190,8 +194,8 @@ async def on_voice_state_update(member, before, after):
                     if before.channel.name == voice_channel.name and member.bot == False:
                         #await member.guild.system_channel.send(member.name + ' just left voice.')
                         clip = gTTS(text= "Goodbye " + member.display_name, tld='com',lang='zh-CN')
-                        clip.save("clip.mp3")
-                        source = FFmpegPCMAudio('clip.mp3')
+                        clip.save("goodbye.mp3")
+                        source = FFmpegOpusAudio('goodbye.mp3')
                         await play_queued(voice_channel, source)
                         print("Sending: Goodbye " + member.display_name)
                         #Disconnect if no one else is in voice
@@ -209,7 +213,7 @@ async def on_voice_channel_effect(effect):
 
         voice_channel = get_voice_channel(effect.channel.guild.id)
         if voice_channel and voice_channels[voice_channel.id] and effect.emoji.name == '🦎':
-            source = FFmpegPCMAudio(os.path.join('gex', random.choice(os.listdir(os.path.join(os.getcwd(), 'gex')))))
+            source = FFmpegOpusAudio(os.path.join('gex', random.choice(os.listdir(os.path.join(os.getcwd(), 'gex')))))
             await play_queued(voice_channel, source)
             print('Sending: Gex Quote')
 
