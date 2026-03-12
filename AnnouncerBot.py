@@ -1,6 +1,5 @@
 import os
 import random
-from time import sleep
 import discord
 from discord import FFmpegPCMAudio
 from discord.ext import commands
@@ -104,6 +103,37 @@ async def enable(ctx):
 async def disable(ctx):
     await set_welcome_status(ctx, 0)
 
+async def set_welcome_status(ctx, new_status):
+    try:
+        global voice_channels
+
+        voice_channel = get_voice_channel(ctx.guild.id)
+        if voice_channel: #Status is irrelevant if we don't have a voice channel set
+            cnx = mysql.connector.connect(**db_config)
+            with cnx.cursor() as cursor:
+                cursor.execute("UPDATE servers "
+                            "SET welcome_enabled = %s WHERE guild_id = %s", (new_status, str(ctx.guild.id)))
+                cnx.commit()
+            voice_channels[voice_channel.id] = bool(new_status)
+
+            if voice_channels[voice_channel.id]:
+                await ctx.send('Enabled welcome and goodbye.')
+                #Need to join if enabled
+                await join_if_active(voice_channel, voice_channels[voice_channel.id])
+            else:
+                await ctx.send('Disabled welcome and goodbye.')
+                #Need to leave if disabled
+                voice_client = get_voice_client(voice_channel)
+                if voice_client:
+                    while voice_client.is_playing():
+                        await asyncio.sleep(.25)
+                    await voice_client.disconnect()
+        else:
+            await ctx.send('Please set a voice channel first using !setvc [channel name]')
+
+    except Exception as e:
+        print(f"Something went wrong with set_welcome_status: {e}")
+
 @bot.command(name = 'setvc', help = 'Sets the voice channel for the bot to announce in. Usage: !setvc [channel name]')
 async def setvc(ctx, *, channel_name):
     try:
@@ -197,37 +227,6 @@ def get_voice_client(voice_channel):
     #Get the voice client that's connected to the given voice channel
     return next((vc for vc in bot.voice_clients if vc.channel.id == voice_channel.id), None)
 
-async def set_welcome_status(ctx, new_status):
-    try:
-        global voice_channels
-
-        voice_channel = get_voice_channel(ctx.guild.id)
-        if voice_channel: #Status is irrelevant if we don't have a voice channel set
-            cnx = mysql.connector.connect(**db_config)
-            with cnx.cursor() as cursor:
-                cursor.execute("UPDATE servers "
-                            "SET welcome_enabled = %s WHERE guild_id = %s", (new_status, str(ctx.guild.id)))
-                cnx.commit()
-            voice_channels[voice_channel.id] = bool(new_status)
-
-            if voice_channels[voice_channel.id]:
-                await ctx.send('Enabled welcome and goodbye.')
-                #Need to join if enabled
-                await join_if_active(voice_channel, voice_channels[voice_channel.id])
-            else:
-                await ctx.send('Disabled welcome and goodbye.')
-                #Need to leave if disabled
-                voice_client = get_voice_client(voice_channel)
-                if voice_client:
-                    while voice_client.is_playing():
-                        sleep(1)
-                    await voice_client.disconnect()
-        else:
-            await ctx.send('Please set a voice channel first using !setvc [channel name]')
-
-    except Exception as e:
-        print(f"Something went wrong with set_welcome_status: {e}")
-
 async def play_queued(voice_channel, source):
     try:
         global alive
@@ -236,7 +235,7 @@ async def play_queued(voice_channel, source):
             voice_client = get_voice_client(voice_channel)
             if voice_client: #If we're already connected, wait for the current audio to finish and then play the new one
                 while voice_client.is_playing():
-                    sleep(1)
+                    await asyncio.sleep(.25)
                 voice_client.play(source)
             else: #If we're not connected, connect and play the audio
                 voice_client = await voice_channel.connect()
@@ -261,9 +260,10 @@ async def leave_if_empty(voice_channel):
             voice_client = get_voice_client(voice_channel)
             if voice_client:
                 while voice_client.is_playing():
-                    sleep(1)
+                    await asyncio.sleep(.25)
                 if len(voice_channel.members) == 1: #If there's only one member left in the channel, it's the bot
                     await voice_client.disconnect()
+                    print(voice_channel.name + " is now empty, leaving channel.")
 
     except Exception as e:
         print(f"Something went wrong with leave_if_empty: {e}")
